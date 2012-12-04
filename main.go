@@ -18,7 +18,9 @@ import (
 	"net/http/fcgi"
 	"net/http/httputil"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 )
 
 var config = flag.String("config", "pkg-directory.conf", "Path to a pkg-directory config file")
@@ -69,12 +71,21 @@ func (d *DirMap) GetSubdir(path string, uniqify bool) *DirMap {
 
 func LoadConfig(cfgpath string) error {
 	// TODO: make the config file more complete; eg, where to cache the checked out repo, etc
+	log.Print("loading config")
 	rawfile, err := os.Open(cfgpath)
 	if err != nil {
 		return err
 	}
 	defer rawfile.Close()
 	file := bufio.NewReader(rawfile)
+
+	newDM := &DirMap{
+		Repository: "",
+		VCS:        "",
+		Path:       "",
+		Parent:     nil,
+		subDirs:    map[string]*DirMap{},
+	}
 
 	lno := 0
 	for {
@@ -92,23 +103,28 @@ func LoadConfig(cfgpath string) error {
 			}
 			fields := strings.Fields(line)
 			if len(fields) != 3 {
-				panic(fmt.Sprintf("Invalid config: wrong number of fields on line %d", lno))
+				log.Printf("Invalid config: wrong number of fields on line %d", lno)
+				return nil
 			}
 			prefix := fields[0]
 			vcs := fields[1]
 			repo := fields[2]
 
-			dm := dirMap.GetSubdir(prefix, true)
+			dm := newDM.GetSubdir(prefix, true)
 			dm.Repository = repo
 			dm.Path = prefix
 			dm.VCS = vcs
-			
+
 			if err != nil {
 				break
 			}
 		}
 	}
+	dirMap = newDM
 	return nil
+}
+func ServeDirMap(w http.ResponseWriter, req *http.Request) {
+	dirMap.ServeHTTP(w, req)
 }
 
 func (d *DirMap) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -147,13 +163,28 @@ func (d *DirMap) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 func main() {
 	flag.Parse()
-	log.Print("loading config")
 	err := LoadConfig(*config)
+	if dirMap == nil {
+		log.Fatal("No valid config; exiting")
+	}
 	if err != nil {
 		panic(err)
 	}
+
+	syscallChan := make(chan os.Signal, 1)
+	signal.Notify(syscallChan, syscall.SIGUSR1)
+
+	go func() {
+		for _ = range syscallChan {
+			LoadConfig(*config)
+		}
+	}()
 	log.Print("Starting up")
 
+
+	http.HandleFunc("/", ServeDirMap)
+
+	
 	// fastcgi
 	addr, err := net.ResolveTCPAddr("tcp", *fcgi_addr)
 	if err != nil {
@@ -163,9 +194,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	panic(fcgi.Serve(sock, dirMap))
+	panic(fcgi.Serve(sock, nil))
 	/*
-	 
-	panic(http.ListenAndServe(":6061", dirMap))
-	 */
+
+		panic(http.ListenAndServe(":6061", dirMap))
+	*/
 }
