@@ -137,15 +137,16 @@ func (d *DirMap) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	w.Header().Add("content-type", "text/html")
 
 	fmt.Fprintf(w, `<!DOCTYPE html>
-<body>
+<html>
  <head>
   <meta name="go-import" content="%s %s %s">
  </head>
-</body>`, mapitem.Path, mapitem.VCS, mapitem.Repository)
+</html>`, mapitem.Path, mapitem.VCS, mapitem.Repository)
 }
 
 
 func main() {
+	flag.Parse()
 	log.Print("loading config")
 	err := LoadConfig(*config)
 	if err != nil {
